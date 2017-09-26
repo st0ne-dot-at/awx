@@ -430,16 +430,9 @@ CELERY_IMPORTS = ('awx.main.scheduler.tasks',)
 CELERY_QUEUES = (
     Queue('default', Exchange('default'), routing_key='default'),
     Queue('tower', Exchange('tower'), routing_key='tower'),
-    Queue('tower_scheduler', Exchange('scheduler', type='topic'), routing_key='tower_scheduler.job.#', durable=False),
     Broadcast('tower_broadcast_all')
 )
-CELERY_ROUTES = {'awx.main.scheduler.tasks.run_task_manager': {'queue': 'tower',
-                                                               'routing_key': 'tower'},
-                 'awx.main.scheduler.tasks.run_job_launch': {'queue': 'tower_scheduler',
-                                                             'routing_key': 'tower_scheduler.job.launch'},
-                 'awx.main.scheduler.tasks.run_job_complete': {'queue': 'tower_scheduler',
-                                                               'routing_key': 'tower_scheduler.job.complete'},
-                 'awx.main.tasks.cluster_node_heartbeat': {'queue': 'default',
+CELERY_ROUTES = {'awx.main.tasks.cluster_node_heartbeat': {'queue': 'default',
                                                            'routing_key': 'cluster.heartbeat'},
                  'awx.main.tasks.purge_old_stdout_files': {'queue': 'default',
                                                            'routing_key': 'cluster.heartbeat'}}
@@ -474,6 +467,11 @@ CELERYBEAT_SCHEDULE = {
     },
 }
 AWX_INCONSISTENT_TASK_INTERVAL = 60 * 3
+
+# Celery queues that will always be listened to by celery workers
+# Note: Broadcast queues have unique, auto-generated names, with the alias
+# property value of the original queue name.
+AWX_CELERY_QUEUES_STATIC = [{ 'alias': 'tower_broadcast_all' },]
 
 # Django Caching Configuration
 if is_testing():

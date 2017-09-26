@@ -28,8 +28,8 @@ except:
     psutil = None
 
 # Celery
-from celery import Task, task
-from celery.signals import celeryd_init, worker_process_init, worker_shutdown
+from celery import Task, task, Celery
+from celery.signals import celeryd_init, worker_process_init, worker_shutdown, worker_ready
 
 # Django
 from django.conf import settings
@@ -147,6 +147,65 @@ def handle_setting_changes(self, setting_keys):
         if key.startswith('LOG_AGGREGATOR_'):
             restart_local_services(['uwsgi', 'celery', 'beat', 'callback'])
             break
+
+
+def _cancel_queues(app, worker_queues, worker_name):
+    removed_queues = []
+    for queue in worker_queues:
+        if queue['name'] in settings.AWX_CELERY_QUEUES_STATIC or \
+                { 'alias': queue['name'] } in settings.AWX_CELERY_QUEUES_STATIC:
+            continue
+
+        removed_queues.append(queue['name'])
+        app.control.cancel_consumer(queue['name'], reply=True, destination=[worker_name])
+    return removed_queues
+
+
+def _add_queues(app, instance, worker_name):
+    # Add worker to group-named queues
+    queues = []
+    for ig in instance.rampart_groups.all():
+        app.control.add_consumer(ig.name, reply=True, destination=[worker_name])
+        queues.append(ig.name)
+
+    # Add worker to worker-named queue
+    app.control.add_consumer(instance.hostname, reply=True, destination=[worker_name])
+    queues.append(instance.hostname)
+
+    return queues
+
+
+def _handle_ha_toplogy_changes():
+    instance = Instance.objects.me()
+    celery_worker_name = 'celery@%s' % instance.hostname
+
+    removed_queues = []
+    added_queues = []
+
+    # Try catch this
+    app = Celery(broker=settings.BROKER_URL)
+    celery_host_queues = app.control.inspect([celery_worker_name]).active_queues()
+    if celery_host_queues is not None:
+        if celery_worker_name in celery_host_queues:
+            removed_queues = _cancel_queues(app, celery_host_queues[celery_worker_name], celery_worker_name)
+        else:
+            logger.warn('Local worker {} not found in celery queue list {}'.format(celery_worker_name, celery_host_queues))
+
+    added_queues = _add_queues(app, instance, celery_worker_name)
+    return (instance, removed_queues, added_queues)
+
+
+@task(queue='tower_broadcast_all', bind=True, base=LogErrorsTask)
+def handle_ha_toplogy_changes(self):
+    (instance, removed_queues, added_queues) = _handle_ha_toplogy_changes()
+    logger.info("Workers on node '{}' removed from queues {} and added to queues {}"
+            .format(instance.hostname, removed_queues, added_queues))
+
+
+@worker_ready.connect
+def handle_ha_toplogy_worker_ready(sender, **kwargs):
+    (instance, removed_queues, added_queues) = _handle_ha_toplogy_changes()
+    logger.info("Workers on node '{}' added queues {}".format(instance.hostname, added_queues))
 
 
 @task(queue='tower', base=LogErrorsTask)

@@ -21,12 +21,12 @@ class LogErrorsTask(Task):
         super(LogErrorsTask, self).on_failure(exc, task_id, args, kwargs, einfo)
 
 
-@task
+@task(bind=True, queue='tower', base=LogErrorsTask)
 def run_job_launch(job_id):
     TaskManager().schedule()
 
 
-@task
+@task(bind=True, queue='tower', base=LogErrorsTask)
 def run_job_complete(job_id):
     TaskManager().schedule()
 
